@@ -158,14 +158,12 @@ func getSimple(conn net.Conn) (uint8, error) {
 
 func sendSimple(conn net.Conn, i uint8) error {
 	fmt.Printf("sending simple %x\n", i)
-	msg := common.Simple{Value: i}
-	return binary.Write(conn, binary.BigEndian, &msg)
+	return binary.Write(conn, binary.BigEndian, &common.Simple{Value: i})
 
 }
 
 func packetReader(pcapChan <-chan gopacket.Packet, wg *sync.WaitGroup, tcp, udp *[65536]bool) {
 	for packet := range pcapChan {
-
 		switch layer := packet.TransportLayer().(type) {
 		case *layers.TCP:
 			tcp[layer.DstPort] = true
