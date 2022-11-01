@@ -19,11 +19,11 @@ type InitMsg struct {
 }
 
 type Error struct {
-	s string
+	S string
 }
 
 func (err Error) Error() string {
-	return err.s
+	return err.S
 }
 
 type Simple struct {
