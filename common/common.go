@@ -8,8 +8,6 @@ const (
 	MSG_DONE
 	MSG_MORE
 	MSG_HELLOHEADER = 0xdefceb
-
-	NUMCONNS = 20
 )
 
 type InitMsg struct {
