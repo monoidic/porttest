@@ -101,7 +101,7 @@ func Check1[T any](arg1 T, err error) T {
 func (p PackedPorts) Iter() <-chan uint16 {
 	ret := make(chan uint16)
 
-	go func(arr [0x2000]byte, ch chan uint16) {
+	go func(arr [0x2000]byte, ch chan<- uint16) {
 		for i, b := range arr {
 			if b == 0 {
 				continue
