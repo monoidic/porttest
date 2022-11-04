@@ -16,9 +16,9 @@ The server binds to an IP:port on which it listens for control messages from the
 
 ## Client
 ```sh
-./client -server_ip 10.246.5.5:57005 -src_ip $(curl -4s https://icanhazip.com) -target_ip $(dig +short A example.com) -result_name example
+./client -server_ip 10.246.5.5:57005 -src_ip $(curl -4s https://icanhazip.com) -target_ip $(dig +short A example.com) -result_name example -ports 80,443,600-700
 ```
-The client has to specify its source IP for connection attempts and the target IP to send connection attempts to. The server IP:port to send control messages to should also be specified, though it defaults to port 57005 on the target IP.
+The client has to specify its source IP for connection attempts, the target IP to send connection attempts to, and the ports/port ranges. The server IP:port to send control messages to should also be specified, though it defaults to port 57005 on the target IP.
 
 Results will be saved to `results/${result_name}.txt`, with the default `result_name` of `result`.
 

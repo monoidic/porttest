@@ -53,7 +53,9 @@ func main() {
 func handleConn(netif string, conn net.Conn) {
 	defer conn.Close()
 
-	ipStr, err := getInitMsg(conn)
+	var tcpA, udpA [65536]bool
+
+	ipStr, err := getInitMsg(conn, &tcpA, &udpA)
 	if err != nil {
 		log.Printf("error getting initmsg: %s", err)
 		return
@@ -70,8 +72,6 @@ func handleConn(netif string, conn net.Conn) {
 
 	var wg sync.WaitGroup
 	wg.Add(NUMREADERS)
-
-	var tcpA, udpA [65536]bool
 
 	for i := 0; i < NUMREADERS; i++ {
 		go packetReader(pcapChan, &wg, &tcpA, &udpA)
@@ -117,6 +117,7 @@ func handleConn(netif string, conn net.Conn) {
 
 }
 
+// send a PortsResult to the client
 func sendPortsResult(conn net.Conn, result common.PortsResult) error {
 	totalCount := 0
 
@@ -131,7 +132,8 @@ func sendPortsResult(conn net.Conn, result common.PortsResult) error {
 	return binary.Write(conn, binary.BigEndian, &result)
 }
 
-func getInitMsg(conn net.Conn) (ip string, err error) {
+// perform initial handshake/setup with the client
+func getInitMsg(conn net.Conn, tcp, udp *[65536]bool) (ip string, err error) {
 	var initmsg common.InitMsg
 	if err := binary.Read(conn, binary.BigEndian, &initmsg); err != nil {
 		return "", err
@@ -142,11 +144,28 @@ func getInitMsg(conn net.Conn) (ip string, err error) {
 	}
 
 	if addr, ok := netip.AddrFromSlice(initmsg.Ip[:initmsg.Length]); ok {
-		return addr.String(), nil
+		ip = addr.String()
+	} else {
+		return "", common.Error{S: fmt.Sprintf("invalid addr length %d", initmsg.Length)}
 	}
-	return "", common.Error{S: fmt.Sprintf("invalid addr length %d", initmsg.Length)}
+
+	for i := 0; i < 65536; i++ {
+		tcp[i] = true
+		udp[i] = true
+	}
+
+	for i, msgPorts := range []common.PackedPorts{initmsg.Tcp, initmsg.Udp} {
+		arr := []*[65536]bool{tcp, udp}[i]
+
+		for port := range msgPorts.Iter() {
+			arr[port] = false
+		}
+	}
+
+	return ip, nil
 }
 
+// receive a simple one-byte message from the client
 func getSimple(conn net.Conn) (uint8, error) {
 	var msg common.Simple
 	if err := binary.Read(conn, binary.BigEndian, &msg); err != nil {
@@ -156,12 +175,14 @@ func getSimple(conn net.Conn) (uint8, error) {
 	return msg.Value, nil
 }
 
+// send a simple one-byte message to the client
 func sendSimple(conn net.Conn, i uint8) error {
 	fmt.Printf("sending simple %x\n", i)
 	return binary.Write(conn, binary.BigEndian, &common.Simple{Value: i})
 
 }
 
+// read pcap channel messages and mark ports as being reachable
 func packetReader(pcapChan <-chan gopacket.Packet, wg *sync.WaitGroup, tcp, udp *[65536]bool) {
 	for packet := range pcapChan {
 		switch layer := packet.TransportLayer().(type) {

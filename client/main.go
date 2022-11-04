@@ -23,10 +23,12 @@ func main() {
 	var serverNetloc string
 	var srcIP string
 	var resultName string
+	var portS string
 	flag.StringVar(&targetIP, "target_ip", "", "IP to send connection attempts to")
 	flag.StringVar(&serverNetloc, "server_ip", "", "IP:port to connect to for commands attempts to")
 	flag.StringVar(&srcIP, "src_ip", "", "source IP of this host to send to server")
 	flag.StringVar(&resultName, "result_name", "result", "name for this result")
+	flag.StringVar(&portS, "ports", "", "ports to scan (format: comma-seperated ports or inclusive ranges, e.g 80,443,600-700)")
 	flag.Parse()
 
 	if _, err := netip.ParseAddr(targetIP); err != nil {
@@ -41,6 +43,10 @@ func main() {
 		serverNetloc = fmt.Sprintf("%s:57005", targetIP)
 	}
 
+	if portS == "" {
+		log.Panicln("please specify ports to scan")
+	}
+
 	serverConn := getServerConn(serverNetloc)
 	defer serverConn.Close()
 
@@ -49,21 +55,20 @@ func main() {
 
 	ports := common.PortsResult{}
 
-	for _, protoPorts := range []*common.PackedPorts{&ports.Tcp, &ports.Udp} {
-		protoPorts.Packed[0] = 0x7f
-		for i := 1; i < 0x2000; i++ {
-			protoPorts.Packed[i] = 0xff
-		}
+	for port := range parsePortString(portS) {
+		index := port / 8
+		mask := uint8(1 << (port % 8))
+		ports.Tcp.Packed[index] |= mask
+		ports.Udp.Packed[index] |= mask
 	}
 
 	for i := 0; i < NUMCONNS; i++ {
 		go dialer(targetIP, dialCh, &wg)
 	}
 
-	serverConn.hello(netip.MustParseAddr(srcIP))
+	serverConn.hello(netip.MustParseAddr(srcIP), portS)
 
 	portCount := ports.Len()
-
 	for {
 		wg.Add(portCount)
 		go generateDialInfo(ports, dialCh)
@@ -87,7 +92,9 @@ func main() {
 	saveResults(resultName, ports)
 }
 
+// save results as formatted text to results/{resultName}.txt
 func saveResults(resultName string, ports common.PortsResult) {
+	common.Check(os.MkdirAll("results", 0o755))
 	fd := common.Check1(os.Create(fmt.Sprintf("results/%s.txt", resultName)))
 	defer func() { common.Check(fd.Close()) }()
 
@@ -101,6 +108,7 @@ func saveResults(resultName string, ports common.PortsResult) {
 	}
 }
 
+// set up and configure connection to the server
 func getServerConn(serverNetloc string) serverConn {
 	var tcpConn *net.TCPConn
 	if addrport, err := netip.ParseAddrPort(serverNetloc); err != nil {
@@ -116,6 +124,7 @@ func getServerConn(serverNetloc string) serverConn {
 	return serverConn{conn: tcpConn}
 }
 
+// generate protocol:port pairs to attempt to connect to from PortsResult
 func generateDialInfo(result common.PortsResult, outCh chan<- dialInfo) {
 	for i, ports := range []common.PackedPorts{result.Tcp, result.Udp} {
 		proto := []string{"tcp", "udp"}[i]
@@ -129,11 +138,13 @@ func generateDialInfo(result common.PortsResult, outCh chan<- dialInfo) {
 	}
 }
 
+// protocol:port pairs for dialer workers
 type dialInfo struct {
 	proto string
 	port  string
 }
 
+// worker function waiting for protocol:port pairs from a channel to attempt to connect to
 func dialer(ip string, inCh <-chan dialInfo, wg *sync.WaitGroup) {
 	for di := range inCh {
 		host := net.JoinHostPort(ip, di.port)
@@ -147,6 +158,7 @@ var dialPayload = []byte("X")
 var dialTimeout = time.Second * 3
 var pause = time.Millisecond * 10
 
+// attempt a connection to a protoocol:port pair
 func tryDial(proto, host string) bool {
 	conn, err := net.DialTimeout(proto, host, dialTimeout)
 	if err != nil {
@@ -176,20 +188,29 @@ func tryDial(proto, host string) bool {
 	return false
 }
 
+// wrapper struct for a connection to a server
 type serverConn struct {
 	conn *net.TCPConn
 }
 
+// close the server connection
 func (sc serverConn) Close() {
 	common.Check(sc.conn.Close())
 }
 
-func (sc serverConn) hello(ip netip.Addr) {
+// initial handshake between the client and server
+func (sc serverConn) hello(ip netip.Addr, portS string) {
 	msg := common.InitMsg{
 		Header: common.MSG_HELLOHEADER,
 		Length: uint8(ip.BitLen() / 8),
 	}
 	copy(msg.Ip[:], ip.AsSlice())
+	for port := range parsePortString(portS) {
+		index := port / 8
+		mask := uint8(1 << (port % 8))
+		msg.Tcp.Packed[index] |= mask
+		msg.Udp.Packed[index] |= mask
+	}
 
 	common.Check(binary.Write(sc.conn, binary.BigEndian, &msg))
 
@@ -198,17 +219,20 @@ func (sc serverConn) hello(ip netip.Addr) {
 	}
 }
 
+// send a simple one-byte message to the server
 func (sc serverConn) sendSimple(i uint8) {
 	msg := common.Simple{Value: i}
 	common.Check(binary.Write(sc.conn, binary.BigEndian, &msg))
 }
 
+// receive a simple one-byte message from the server
 func (sc serverConn) getSimple() uint8 {
 	var msg common.Simple
 	common.Check(binary.Read(sc.conn, binary.BigEndian, &msg))
 	return msg.Value
 }
 
+// send a GETPORTS message to the server and receive a PortsResult
 func (sc serverConn) getPortsResult() common.PortsResult {
 	sc.sendSimple(common.MSG_GETPORTS)
 
@@ -216,4 +240,32 @@ func (sc serverConn) getPortsResult() common.PortsResult {
 	common.Check(binary.Read(sc.conn, binary.BigEndian, &response))
 
 	return response
+}
+
+// parse port string, e.g 80,443,600-700, and returns a channel
+// with the resulting port numbers
+func parsePortString(portS string) <-chan uint16 {
+	ret := make(chan uint16, 16)
+
+	go func(ch chan<- uint16, portS string) {
+		for _, s := range strings.Split(portS, ",") {
+			if strings.Contains(s, "-") {
+				startEnd := strings.SplitN(s, "-", 2)
+				start := common.Check1(strconv.ParseUint(startEnd[0], 10, 16))
+				end := common.Check1(strconv.ParseUint(startEnd[1], 10, 16))
+				if start >= end {
+					log.Panicf("invalid port range, %d >= %d (start >= end)", start, end)
+				}
+
+				for i := start; i <= end; i++ {
+					ch <- uint16(i)
+				}
+			} else {
+				ch <- uint16(common.Check1(strconv.ParseUint(s, 10, 16)))
+			}
+		}
+		close(ch)
+	}(ret, portS)
+
+	return ret
 }
