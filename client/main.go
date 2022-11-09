@@ -245,7 +245,7 @@ func (sc serverConn) getPortsResult() common.PortsResult {
 // parse port string, e.g 80,443,600-700, and returns a channel
 // with the resulting port numbers
 func parsePortString(portS string) <-chan uint16 {
-	ret := make(chan uint16, 16)
+	ret := make(chan uint16)
 
 	go func(ch chan<- uint16, portS string) {
 		for _, s := range strings.Split(portS, ",") {
