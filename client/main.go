@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/zlib"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -204,7 +205,9 @@ func (sc serverConn) hello(ip netip.Addr, ports *common.PortsResult) {
 	copy(msg.Udp.Packed[:], ports.Udp.Packed[:])
 	copy(msg.Ip[:], ip.AsSlice())
 
-	common.Check(binary.Write(sc.conn, binary.BigEndian, &msg))
+	w := zlib.NewWriter(sc.conn)
+	common.Check(binary.Write(w, binary.BigEndian, &msg))
+	common.Check(w.Close())
 
 	if sc.getSimple() != common.MSG_HELLOVALUE {
 		log.Panicf("unexpected dummy value in done msg")
@@ -229,7 +232,9 @@ func (sc serverConn) getPortsResult() common.PortsResult {
 	sc.sendSimple(common.MSG_GETPORTS)
 
 	var response common.PortsResult
-	common.Check(binary.Read(sc.conn, binary.BigEndian, &response))
+	r := common.Check1(zlib.NewReader(sc.conn))
+	common.Check(binary.Read(r, binary.BigEndian, &response))
+	common.Check(r.Close())
 
 	return response
 }

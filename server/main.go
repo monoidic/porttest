@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/zlib"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -41,7 +42,7 @@ func main() {
 
 	for {
 		if conn, err := server.Accept(); err == nil {
-			fmt.Printf("got conn %v\n", conn)
+			fmt.Printf("got conn from %s\n", conn.RemoteAddr())
 			go handleConn(netif, conn)
 		} else {
 			log.Printf("error accepting conn: %s", err)
@@ -129,7 +130,12 @@ func sendPortsResult(conn net.Conn, result common.PortsResult) error {
 	}
 	fmt.Printf("%d ports total\n", totalCount)
 
-	return binary.Write(conn, binary.BigEndian, &result)
+	w := zlib.NewWriter(conn)
+	if err := binary.Write(w, binary.BigEndian, &result); err != nil {
+		w.Close()
+		return err
+	}
+	return w.Close()
 }
 
 var zeroAddr = netip.AddrFrom4([4]byte{0, 0, 0, 0})
@@ -137,7 +143,17 @@ var zeroAddr = netip.AddrFrom4([4]byte{0, 0, 0, 0})
 // perform initial handshake/setup with the client
 func getInitMsg(conn net.Conn, tcp, udp *[65536]bool) (ip string, err error) {
 	var initmsg common.InitMsg
-	if err = binary.Read(conn, binary.BigEndian, &initmsg); err != nil {
+	r, err := zlib.NewReader(conn)
+	if err != nil {
+		return "", err
+	}
+
+	if err = binary.Read(r, binary.BigEndian, &initmsg); err != nil {
+		r.Close()
+		return "", err
+	}
+
+	if err = r.Close(); err != nil {
 		return "", err
 	}
 
