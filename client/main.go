@@ -16,19 +16,19 @@ import (
 	"github.com/monoidic/porttest/common"
 )
 
-const NUMCONNS = 20
-
 func main() {
 	var targetIP string
 	var serverNetloc string
 	var srcIP string
 	var resultName string
 	var portS string
+	var numConns int
 	flag.StringVar(&targetIP, "target_ip", "", "IP to send connection attempts to")
 	flag.StringVar(&serverNetloc, "server_ip", "", "IP:port to connect to for commands attempts to")
-	flag.StringVar(&srcIP, "src_ip", "", "source IP of this host to send to server")
+	flag.StringVar(&srcIP, "src_ip", "0.0.0.0", "source IP of this host to send to server")
 	flag.StringVar(&resultName, "result_name", "result", "name for this result")
-	flag.StringVar(&portS, "ports", "", "ports to scan (format: comma-seperated ports or inclusive ranges, e.g 80,443,600-700)")
+	flag.StringVar(&portS, "ports", "0-1024", "ports to scan (format: comma-seperated ports or inclusive ranges, e.g 80,443,600-700)")
+	flag.IntVar(&numConns, "conns", 20, "number of parallel connections to use")
 	flag.Parse()
 
 	if _, err := netip.ParseAddr(targetIP); err != nil {
@@ -41,10 +41,6 @@ func main() {
 
 	if serverNetloc == "" {
 		serverNetloc = fmt.Sprintf("%s:57005", targetIP)
-	}
-
-	if portS == "" {
-		log.Panicln("please specify ports to scan")
 	}
 
 	serverConn := getServerConn(serverNetloc)
@@ -62,11 +58,11 @@ func main() {
 		ports.Udp.Packed[index] |= mask
 	}
 
-	for i := 0; i < NUMCONNS; i++ {
+	for i := 0; i < numConns; i++ {
 		go dialer(targetIP, dialCh, &wg)
 	}
 
-	serverConn.hello(netip.MustParseAddr(srcIP), portS)
+	serverConn.hello(netip.MustParseAddr(srcIP), &ports)
 
 	portCount := ports.Len()
 	for {
@@ -199,18 +195,14 @@ func (sc serverConn) Close() {
 }
 
 // initial handshake between the client and server
-func (sc serverConn) hello(ip netip.Addr, portS string) {
+func (sc serverConn) hello(ip netip.Addr, ports *common.PortsResult) {
 	msg := common.InitMsg{
 		Header: common.MSG_HELLOHEADER,
 		Length: uint8(ip.BitLen() / 8),
 	}
+	copy(msg.Tcp.Packed[:], ports.Tcp.Packed[:])
+	copy(msg.Udp.Packed[:], ports.Udp.Packed[:])
 	copy(msg.Ip[:], ip.AsSlice())
-	for port := range parsePortString(portS) {
-		index := port / 8
-		mask := uint8(1 << (port % 8))
-		msg.Tcp.Packed[index] |= mask
-		msg.Udp.Packed[index] |= mask
-	}
 
 	common.Check(binary.Write(sc.conn, binary.BigEndian, &msg))
 
@@ -249,19 +241,19 @@ func parsePortString(portS string) <-chan uint16 {
 
 	go func(ch chan<- uint16, portS string) {
 		for _, s := range strings.Split(portS, ",") {
-			if strings.Contains(s, "-") {
-				startEnd := strings.SplitN(s, "-", 2)
-				start := common.Check1(strconv.ParseUint(startEnd[0], 10, 16))
-				end := common.Check1(strconv.ParseUint(startEnd[1], 10, 16))
-				if start >= end {
-					log.Panicf("invalid port range, %d >= %d (start >= end)", start, end)
-				}
-
-				for i := start; i <= end; i++ {
-					ch <- uint16(i)
-				}
-			} else {
+			if !strings.Contains(s, "-") {
 				ch <- uint16(common.Check1(strconv.ParseUint(s, 10, 16)))
+				continue
+			}
+			startEnd := strings.SplitN(s, "-", 2)
+			start := common.Check1(strconv.ParseUint(startEnd[0], 10, 16))
+			end := common.Check1(strconv.ParseUint(startEnd[1], 10, 16))
+			if start >= end {
+				log.Panicf("invalid port range, %d >= %d (start >= end)", start, end)
+			}
+
+			for i := start; i <= end; i++ {
+				ch <- uint16(i)
 			}
 		}
 		close(ch)

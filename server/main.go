@@ -132,10 +132,12 @@ func sendPortsResult(conn net.Conn, result common.PortsResult) error {
 	return binary.Write(conn, binary.BigEndian, &result)
 }
 
+var zeroAddr = netip.AddrFrom4([4]byte{0, 0, 0, 0})
+
 // perform initial handshake/setup with the client
 func getInitMsg(conn net.Conn, tcp, udp *[65536]bool) (ip string, err error) {
 	var initmsg common.InitMsg
-	if err := binary.Read(conn, binary.BigEndian, &initmsg); err != nil {
+	if err = binary.Read(conn, binary.BigEndian, &initmsg); err != nil {
 		return "", err
 	}
 
@@ -143,11 +145,21 @@ func getInitMsg(conn net.Conn, tcp, udp *[65536]bool) (ip string, err error) {
 		return "", common.Error{S: fmt.Sprintf("invalid header value: %x", initmsg.Header)}
 	}
 
-	if addr, ok := netip.AddrFromSlice(initmsg.Ip[:initmsg.Length]); ok {
-		ip = addr.String()
-	} else {
+	if !(initmsg.Length == 4 || initmsg.Length == 16) {
 		return "", common.Error{S: fmt.Sprintf("invalid addr length %d", initmsg.Length)}
 	}
+
+	addr, _ := netip.AddrFromSlice(initmsg.Ip[:initmsg.Length])
+
+	if addr == zeroAddr {
+		addrP, err := netip.ParseAddrPort(conn.RemoteAddr().String())
+		if err != nil {
+			return "", err
+		}
+		addr = addrP.Addr()
+	}
+
+	ip = addr.String()
 
 	for i := 0; i < 65536; i++ {
 		tcp[i] = true

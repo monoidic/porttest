@@ -53,7 +53,7 @@ type PackedPorts struct {
 }
 
 // count the number of ports indicated as reachable in the given PackedPorts
-func (p PackedPorts) Len() (total int) {
+func (p *PackedPorts) Len() (total int) {
 	for _, b := range p.Packed {
 		total += bits.OnesCount8(b)
 	}
@@ -61,7 +61,7 @@ func (p PackedPorts) Len() (total int) {
 }
 
 // returns a channel to which every port marked in PackedPorts is written and which is closed at the end
-func (p PackedPorts) Iter() <-chan uint16 {
+func (p *PackedPorts) Iter() <-chan uint16 {
 	ret := make(chan uint16, 16)
 
 	go func(arr [0x2000]byte, ch chan<- uint16) {
@@ -88,7 +88,7 @@ type PortsResult struct {
 }
 
 // count the number of ports indicated as reachable TCP and UDP ports in the given PortsResult
-func (p PortsResult) Len() int {
+func (p *PortsResult) Len() int {
 	return p.Tcp.Len() + p.Udp.Len()
 }
 
