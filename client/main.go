@@ -98,11 +98,46 @@ func saveResults(resultName string, ports common.PortsResult) {
 	for pPortsI, pPorts := range []common.PackedPorts{ports.Tcp, ports.Udp} {
 		proto := []string{"tcp", "udp"}[pPortsI]
 		fmt.Fprintf(fd, "[closed %s ports]\n", proto)
-		for port := range pPorts.Iter() {
-			fmt.Fprintf(fd, "%d\n", port)
+		for portRange := range numsToRanges(pPorts.Iter()) {
+			fmt.Fprintf(fd, "%s\n", portRange)
 		}
 		fmt.Fprint(fd, "\n")
 	}
+}
+
+// converts numbers, e.g 1,2,3,4,5,6,7,8,10,11,12,14,16,17,18 to ranges, e.g 1-8,10-12,14,16-18
+// expects the numbers in order
+func numsToRanges(inCh <-chan uint16) <-chan string {
+	outCh := make(chan string, 16)
+
+	go func(inCh <-chan uint16, outCh chan<- string) {
+		defer close(outCh)
+		rangeStart, ok := <-inCh
+		if !ok {
+			return
+		}
+
+		prevNum := rangeStart
+		for num := range inCh {
+			if num != prevNum+1 {
+				// yield previous range, start new one
+				outCh <- formatRange(rangeStart, prevNum)
+				rangeStart = num
+			}
+			prevNum = num
+		}
+		// final range
+		outCh <- formatRange(rangeStart, prevNum)
+	}(inCh, outCh)
+
+	return outCh
+}
+
+func formatRange(start, end uint16) string {
+	if start == end {
+		return fmt.Sprintf("%d", start)
+	}
+	return fmt.Sprintf("%d-%d", start, end)
 }
 
 // set up and configure connection to the server
