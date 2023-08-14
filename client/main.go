@@ -32,6 +32,10 @@ func main() {
 	flag.IntVar(&numConns, "conns", 20, "number of parallel connections to use")
 	flag.Parse()
 
+	if targetIP == "" {
+		log.Panicln("target IP unpsecified")
+	}
+
 	if _, err := netip.ParseAddr(targetIP); err != nil {
 		log.Panicf("invalid target IP %q: %s\n", targetIP, err)
 	}
