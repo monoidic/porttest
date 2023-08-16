@@ -38,7 +38,8 @@ jobs:
     - run: printf 'nameserver 1.1.1.1\n' | sudo tee rootfs/etc/resolv.conf
     # git wants urandom
     - run: sudo mount -t devtmpfs devtmpfs rootfs/dev/
-    - run: sudo chroot rootfs qemu-${{ matrix.arch }}-static sh /static.sh
+    - run: sudo cp $(which qemu-${{ matrix.arch }}-static) rootfs/
+    - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static sh /static.sh
 
     - run: mkdir a
     - run: cp rootfs/porttest/server/server rootfs/porttest/client/client a
