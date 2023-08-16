@@ -39,7 +39,7 @@ jobs:
     # git wants urandom
     - run: sudo mount -t devtmpfs devtmpfs rootfs/dev/
     - run: sudo cp $(which qemu-${{ matrix.arch }}-static) rootfs/
-    - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static sh /static.sh
+    - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static /bin/sh /static.sh
 
     - run: mkdir a
     - run: cp rootfs/porttest/server/server rootfs/porttest/client/client a
