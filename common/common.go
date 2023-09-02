@@ -8,28 +8,62 @@ import (
 // constants used in messages between the client and server
 const (
 	// server=>client simple message response to initmsg, after server setup is done
-	MSG_HELLOVALUE = 0x23 + iota
+	MSG_INIT_DONE = 0x23 + iota
 	// client=>server, request a PortsResult
 	MSG_GETPORTS
 	// client=>server, end of communication
 	MSG_DONE
 	// client=>server, continuation of communication
-	MSG_MORE
+	MSG_SYNC_MORE
+
+	// async variants of the above
+	MSG_ASYNC_START
 	// client=>server initmsg constant header value
 	MSG_HELLOHEADER = 0xdefceb
 )
 
+const (
+	// flags in initmsg
+	// v4 or v6 traffic + address
+	FLAG_V6 = 1 << iota
+	// synchronous or asynchronous capture method
+	FLAG_ASYNC
+	FLAG_MAX = iota*2 - 1
+)
+
+var MsgMap = map[uint8]string{
+	MSG_INIT_DONE: "init_done",
+
+	MSG_GETPORTS: "getports",
+	MSG_DONE:     "done",
+
+	MSG_SYNC_MORE: "sync_more",
+
+	MSG_ASYNC_START: "async_start",
+}
+
 // initial message sent from the client to the server at the start of communication
-// has a constant header, a source IP, and a length indicating whether the IP is v4 or v6
+// has a constant header, a source IP, flags to set behaviour, and a version byte
 type InitMsg struct {
 	// constant value MSG_HELLOHEADER
 	Header uint64
+	// increment with protocol changes
+	Version uint8
 	// IPv4 or IPv6 in binary representation
 	Ip [16]byte
-	// 4 or 16, depending on IP version
-	Length uint8
-	// mask of ports that will be asked for
-	PortsResult
+	// flags indicating connection details
+	Flags uint8
+}
+
+type InitSettings struct {
+	Async bool
+}
+
+// increment with protocol changes
+const VERSION = 1
+
+type AsyncInit struct {
+	Ticket uint64
 }
 
 // simple error type
@@ -40,11 +74,6 @@ type Error struct {
 // implement error interface
 func (err Error) Error() string {
 	return err.S
-}
-
-// single-byte message sent between the server and client
-type Simple struct {
-	Value uint8
 }
 
 // 65536 bits packed into 8192 bytes, indicating all 65536 ports
@@ -93,8 +122,8 @@ func (p *PortsResult) Len() int {
 }
 
 // pack two arrays of 65536 bools into two arrays of 8192 bytes
-func (p *PortsResult) Pack(tcp, udp [65536]bool) {
-	for arrI, arr := range [][65536]bool{tcp, udp} {
+func (p *PortsResult) Pack(tcp, udp *[65536]bool) {
+	for arrI, arr := range []*[65536]bool{tcp, udp} {
 		outArr := []*PackedPorts{&p.Tcp, &p.Udp}[arrI]
 		for i := 0; i < 0x2000; i++ {
 			outArr.Packed[i] = boolsToByte(arr, i*8)
@@ -111,7 +140,7 @@ func b2i(b bool, i uint8) uint8 {
 }
 
 // converts 8 bools at arr[i:i+8] into a uint8
-func boolsToByte(arr [65536]bool, i int) uint8 {
+func boolsToByte(arr *[65536]bool, i int) uint8 {
 	return b2i(arr[i], 1) + b2i(arr[i+1], 2) + b2i(arr[i+2], 4) + b2i(arr[i+3], 8) +
 		b2i(arr[i+4], 16) + b2i(arr[i+5], 32) + b2i(arr[i+6], 64) + b2i(arr[i+7], 128)
 }

@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/google/gopacket v1.1.19
-	github.com/monoidic/porttest/common v0.0.0-20230612223028-a86200cde651
+	github.com/monoidic/porttest/common v0.0.0-20230816222334-bd87bfa1ce42
 )
 
-require golang.org/x/sys v0.10.0 // indirect
+require golang.org/x/sys v0.11.0 // indirect

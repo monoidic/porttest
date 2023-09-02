@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/netip"
 	"os"
@@ -24,12 +25,14 @@ func main() {
 	var resultName string
 	var portS string
 	var numConns int
+	var settings common.InitSettings
 	flag.StringVar(&targetIP, "target_ip", "", "IP to send connection attempts to")
 	flag.StringVar(&serverNetloc, "server_ip", "", "IP:port to connect to for commands attempts to")
 	flag.StringVar(&srcIP, "src_ip", "0.0.0.0", "source IP of this host to send to server")
 	flag.StringVar(&resultName, "result_name", "result", "name for this result")
 	flag.StringVar(&portS, "ports", "0-1024", "ports to scan (format: comma-seperated ports or inclusive ranges, e.g 80,443,600-700)")
 	flag.IntVar(&numConns, "conns", 20, "number of parallel connections to use")
+	flag.BoolVar(&settings.Async, "async", false, "use async comms")
 	flag.Parse()
 
 	if targetIP == "" {
@@ -48,13 +51,10 @@ func main() {
 		serverNetloc = fmt.Sprintf("%s:57005", targetIP)
 	}
 
-	serverConn := getServerConn(serverNetloc)
-	defer serverConn.Close()
-
 	dialCh := make(chan dialInfo, 64)
 	var wg sync.WaitGroup
 
-	ports := common.PortsResult{}
+	var ports common.PortsResult
 
 	for port := range parsePortString(portS) {
 		index := port / 8
@@ -67,7 +67,24 @@ func main() {
 		go dialer(targetIP, dialCh, &wg)
 	}
 
-	serverConn.hello(netip.MustParseAddr(srcIP), &ports)
+	if settings.Async {
+		doAsync(serverNetloc, srcIP, &ports, settings, dialCh, &wg)
+	} else {
+		doSync(serverNetloc, srcIP, &ports, settings, dialCh, &wg)
+	}
+	saveResults(resultName, ports)
+}
+
+func doSync(serverNetloc, srcIP string, ports *common.PortsResult, settings common.InitSettings, dialCh chan dialInfo, wg *sync.WaitGroup) {
+	sc := getServerConn(serverNetloc)
+	defer sc.Close()
+
+	sc.hello(netip.MustParseAddr(srcIP), settings)
+	sc.sendPortsResult(ports)
+
+	if sc.getSimple() != common.MSG_INIT_DONE {
+		log.Panicf("expected init done msg")
+	}
 
 	portCount := ports.Len()
 	for {
@@ -76,7 +93,7 @@ func main() {
 
 		wg.Wait()
 
-		ports = serverConn.getPortsResult()
+		sc.getPortsResult(ports)
 		newCount := ports.Len()
 
 		if newCount == 0 || portCount == newCount {
@@ -85,12 +102,75 @@ func main() {
 			log.Panicf("%d closed ports before, %d after", portCount, newCount)
 		}
 		portCount = newCount
-		serverConn.sendSimple(common.MSG_MORE)
+		sc.sendSimple(common.MSG_SYNC_MORE)
 	}
-	serverConn.sendSimple(common.MSG_DONE)
-	close(dialCh)
 
-	saveResults(resultName, ports)
+	sc.sendSimple(common.MSG_DONE)
+	close(dialCh)
+}
+
+func doAsync(serverNetloc, srcIP string, ports *common.PortsResult, settings common.InitSettings, dialCh chan dialInfo, wg *sync.WaitGroup) {
+	ticket := asyncSetup(serverNetloc, srcIP, ports, settings)
+
+	portCount := ports.Len()
+	for {
+		wg.Add(portCount)
+		go generateDialInfo(ports, dialCh)
+
+		wg.Wait()
+
+		asyncGetports(serverNetloc, ports, settings, ticket)
+
+		newCount := ports.Len()
+
+		if newCount == 0 || portCount == newCount {
+			break
+		} else if newCount > portCount {
+			log.Panicf("%d closed ports before, %d after", portCount, newCount)
+		}
+		portCount = newCount
+	}
+
+	asyncDone(serverNetloc, ports, settings, ticket)
+	close(dialCh)
+}
+
+func asyncSetup(serverNetloc, srcIP string, ports *common.PortsResult, settings common.InitSettings) uint64 {
+	sc := getServerConn(serverNetloc)
+	defer sc.Close()
+
+	sc.hello(netip.MustParseAddr(srcIP), settings)
+	ticket := rand.Uint64()
+	sc.SendAsyncInit(&common.AsyncInit{Ticket: ticket})
+	sc.sendSimple(common.MSG_ASYNC_START)
+	sc.sendPortsResult(ports)
+
+	if msg := sc.getSimple(); msg != common.MSG_INIT_DONE {
+		log.Panicf("expected init done message, got 0x%x", msg)
+	}
+
+	return ticket
+}
+
+func asyncGetports(serverNetloc string, ports *common.PortsResult, settings common.InitSettings, ticket uint64) {
+	sc := getServerConn(serverNetloc)
+	defer sc.Close()
+
+	sc.hello(netip.IPv6Loopback(), settings)
+	sc.SendAsyncInit(&common.AsyncInit{Ticket: ticket})
+	sc.getPortsResult(ports)
+}
+
+func asyncDone(serverNetloc string, ports *common.PortsResult, settings common.InitSettings, ticket uint64) {
+	sc := getServerConn(serverNetloc)
+	defer sc.Close()
+
+	sc.hello(netip.IPv6Loopback(), settings)
+	sc.SendAsyncInit(&common.AsyncInit{Ticket: ticket})
+	sc.sendSimple(common.MSG_DONE)
+	if sc.getSimple() != common.MSG_DONE {
+		log.Panicf("expected async done message")
+	}
 }
 
 // save results as formatted text to results/{resultName}.txt
@@ -161,14 +241,17 @@ func getServerConn(serverNetloc string) serverConn {
 }
 
 // generate protocol:port pairs to attempt to connect to from PortsResult
-func generateDialInfo(result common.PortsResult, outCh chan<- dialInfo) {
+func generateDialInfo(result *common.PortsResult, outCh chan<- dialInfo) {
 	for i, ports := range []common.PackedPorts{result.Tcp, result.Udp} {
 		proto := []string{"tcp", "udp"}[i]
 		go func(ports common.PackedPorts, proto string, ch chan<- dialInfo) {
-			di := dialInfo{proto: proto}
+			var infos []dialInfo
 			for port := range ports.Iter() {
-				di.port = strconv.Itoa(int(port))
-				outCh <- di
+				infos = append(infos, dialInfo{proto: proto, port: strconv.Itoa(int(port))})
+			}
+			rand.Shuffle(len(infos), func(i, j int) { infos[i], infos[j] = infos[j], infos[i] })
+			for _, inf := range infos {
+				outCh <- inf
 			}
 		}(ports, proto, outCh)
 	}
@@ -235,47 +318,53 @@ func (sc serverConn) Close() {
 }
 
 // initial handshake between the client and server
-func (sc serverConn) hello(ip netip.Addr, ports *common.PortsResult) {
+func (sc serverConn) hello(ip netip.Addr, settings common.InitSettings) {
 	msg := common.InitMsg{
-		Header: common.MSG_HELLOHEADER,
-		Length: uint8(ip.BitLen() / 8),
+		Header:  common.MSG_HELLOHEADER,
+		Version: common.VERSION,
 	}
-	copy(msg.Tcp.Packed[:], ports.Tcp.Packed[:])
-	copy(msg.Udp.Packed[:], ports.Udp.Packed[:])
+
 	copy(msg.Ip[:], ip.AsSlice())
 
-	w := zlib.NewWriter(sc.conn)
-	common.Check(binary.Write(w, binary.BigEndian, &msg))
-	common.Check(w.Close())
-
-	if sc.getSimple() != common.MSG_HELLOVALUE {
-		log.Panicf("unexpected dummy value in done msg")
+	if ip.Is6() {
+		msg.Flags |= common.FLAG_V6
 	}
+	if settings.Async {
+		msg.Flags |= common.FLAG_ASYNC
+	}
+
+	common.Check(binary.Write(sc.conn, binary.BigEndian, &msg))
 }
 
 // send a simple one-byte message to the server
 func (sc serverConn) sendSimple(i uint8) {
-	msg := common.Simple{Value: i}
-	common.Check(binary.Write(sc.conn, binary.BigEndian, &msg))
+	common.Check(binary.Write(sc.conn, binary.BigEndian, &i))
 }
 
 // receive a simple one-byte message from the server
 func (sc serverConn) getSimple() uint8 {
-	var msg common.Simple
+	var msg uint8
 	common.Check(binary.Read(sc.conn, binary.BigEndian, &msg))
-	return msg.Value
+	return msg
 }
 
 // send a GETPORTS message to the server and receive a PortsResult
-func (sc serverConn) getPortsResult() common.PortsResult {
+func (sc serverConn) getPortsResult(response *common.PortsResult) {
 	sc.sendSimple(common.MSG_GETPORTS)
-
-	var response common.PortsResult
 	r := common.Check1(zlib.NewReader(sc.conn))
-	common.Check(binary.Read(r, binary.BigEndian, &response))
+	common.Check(binary.Read(r, binary.BigEndian, response))
 	common.Check(r.Close())
+}
 
-	return response
+// send a PortsResult to the client
+func (sc serverConn) sendPortsResult(result *common.PortsResult) {
+	w := zlib.NewWriter(sc.conn)
+	common.Check(binary.Write(w, binary.BigEndian, result))
+	common.Check(w.Close())
+}
+
+func (sc serverConn) SendAsyncInit(msg *common.AsyncInit) {
+	common.Check(binary.Write(sc.conn, binary.BigEndian, msg))
 }
 
 // parse port string, e.g 80,443,600-700, and returns a channel
