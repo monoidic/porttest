@@ -33,17 +33,16 @@ jobs:
     - run: wget -O rootfs.tgz https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/${{ matrix.arch }}/alpine-minirootfs-3.18.3-${{ matrix.arch }}.tar.gz
     - run: mkdir rootfs
     - run: sudo tar -C rootfs -xf rootfs.tgz
-    - run: sudo cp static.sh rootfs/
     # actually have DNS resolution
     - run: printf 'nameserver 1.1.1.1\n' | sudo tee rootfs/etc/resolv.conf
     - run: sudo mkdir rootfs/src
     - run: sudo mount -t devtmpfs devtmpfs rootfs/dev/
     - run: sudo mount -o bind . rootfs/src
     - run: sudo cp $(which qemu-${{ matrix.arch }}-static) rootfs/
-    - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static /bin/sh /static.sh
+    - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static /bin/sh /src/static.sh
 
     - run: mkdir a
-    - run: cp rootfs/src/server/server rootfs/src/client/client a
+    - run: cp server/server client/client a
     - run: cd a && zip release.zip server client && mv release.zip ..
 
     - uses: actions/upload-release-asset@v1
