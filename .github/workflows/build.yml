@@ -36,13 +36,13 @@ jobs:
     - run: sudo cp static.sh rootfs/
     # actually have DNS resolution
     - run: printf 'nameserver 1.1.1.1\n' | sudo tee rootfs/etc/resolv.conf
-    # git wants urandom
-    - run: sudo mount -t devtmpfs devtmpfs rootfs/dev/
+    - run: sudo mkdir rootfs/src
+    - run: sudo mount -o bind . rootfs/src
     - run: sudo cp $(which qemu-${{ matrix.arch }}-static) rootfs/
     - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static /bin/sh /static.sh
 
     - run: mkdir a
-    - run: cp rootfs/porttest/server/server rootfs/porttest/client/client a
+    - run: cp rootfs/src/server/server rootfs/src/client/client a
     - run: cd a && zip release.zip server client && mv release.zip ..
 
     - uses: actions/upload-release-asset@v1
