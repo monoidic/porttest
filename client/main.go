@@ -67,17 +67,62 @@ func main() {
 		go dialer(targetIP, dialCh, &wg)
 	}
 
-	if settings.Async {
-		doAsync(serverNetloc, srcIP, &ports, settings, dialCh, &wg)
-	} else {
-		doSync(serverNetloc, srcIP, &ports, settings, dialCh, &wg)
-	}
+	doScan(serverNetloc, srcIP, &ports, settings, dialCh, &wg)
+
 	saveResults(resultName, ports)
 }
 
-func doSync(serverNetloc, srcIP string, ports *common.PortsResult, settings common.InitSettings, dialCh chan dialInfo, wg *sync.WaitGroup) {
+func doScan(serverNetloc, srcIP string, ports *common.PortsResult, settings common.InitSettings, dialCh chan dialInfo, wg *sync.WaitGroup) {
+	var sc serverConn
+	var ticket uint64
+
+	if settings.Async {
+		ticket = asyncSetup(serverNetloc, srcIP, ports, settings)
+	} else {
+		sc = syncSetup(serverNetloc, srcIP, ports, settings)
+		defer sc.Close()
+	}
+
+	portCount := ports.Len()
+	for {
+		wg.Add(portCount)
+		go generateDialInfo(ports, dialCh)
+
+		wg.Wait()
+
+		if settings.Async {
+			asyncGetports(serverNetloc, ports, settings, ticket)
+		} else {
+			sc.getPortsResult(ports)
+		}
+		newCount := ports.Len()
+
+		if newCount == 0 || portCount == newCount {
+			break
+		}
+		if newCount > portCount {
+			log.Panicf("%d closed ports before, %d after", portCount, newCount)
+		}
+
+		portCount = newCount
+		fmt.Printf("\nport count: %d\n", portCount)
+
+		if !settings.Async {
+			sc.sendSimple(common.MSG_SYNC_MORE)
+		}
+	}
+
+	if settings.Async {
+		asyncDone(serverNetloc, ports, settings, ticket)
+	} else {
+		sc.sendSimple(common.MSG_DONE)
+	}
+
+	close(dialCh)
+}
+
+func syncSetup(serverNetloc, srcIP string, ports *common.PortsResult, settings common.InitSettings) serverConn {
 	sc := getServerConn(serverNetloc)
-	defer sc.Close()
 
 	sc.hello(netip.MustParseAddr(srcIP), settings)
 	sc.sendPortsResult(ports)
@@ -85,54 +130,7 @@ func doSync(serverNetloc, srcIP string, ports *common.PortsResult, settings comm
 	if sc.getSimple() != common.MSG_INIT_DONE {
 		log.Panicf("expected init done msg")
 	}
-
-	portCount := ports.Len()
-	for {
-		wg.Add(portCount)
-		go generateDialInfo(ports, dialCh)
-
-		wg.Wait()
-
-		sc.getPortsResult(ports)
-		newCount := ports.Len()
-
-		if newCount == 0 || portCount == newCount {
-			break
-		} else if newCount > portCount {
-			log.Panicf("%d closed ports before, %d after", portCount, newCount)
-		}
-		portCount = newCount
-		sc.sendSimple(common.MSG_SYNC_MORE)
-	}
-
-	sc.sendSimple(common.MSG_DONE)
-	close(dialCh)
-}
-
-func doAsync(serverNetloc, srcIP string, ports *common.PortsResult, settings common.InitSettings, dialCh chan dialInfo, wg *sync.WaitGroup) {
-	ticket := asyncSetup(serverNetloc, srcIP, ports, settings)
-
-	portCount := ports.Len()
-	for {
-		wg.Add(portCount)
-		go generateDialInfo(ports, dialCh)
-
-		wg.Wait()
-
-		asyncGetports(serverNetloc, ports, settings, ticket)
-
-		newCount := ports.Len()
-
-		if newCount == 0 || portCount == newCount {
-			break
-		} else if newCount > portCount {
-			log.Panicf("%d closed ports before, %d after", portCount, newCount)
-		}
-		portCount = newCount
-	}
-
-	asyncDone(serverNetloc, ports, settings, ticket)
-	close(dialCh)
+	return sc
 }
 
 func asyncSetup(serverNetloc, srcIP string, ports *common.PortsResult, settings common.InitSettings) uint64 {
@@ -242,19 +240,34 @@ func getServerConn(serverNetloc string) serverConn {
 
 // generate protocol:port pairs to attempt to connect to from PortsResult
 func generateDialInfo(result *common.PortsResult, outCh chan<- dialInfo) {
+	var currentTCP, currentUDP uint16
+	var numTCP, numUDP int
+	var tcpDone, udpDone bool
 	for i, ports := range []common.PackedPorts{result.Tcp, result.Udp} {
 		proto := []string{"tcp", "udp"}[i]
-		go func(ports common.PackedPorts, proto string, ch chan<- dialInfo) {
+		currentPort := []*uint16{&currentTCP, &currentUDP}[i]
+		currentProto := []*bool{&tcpDone, &udpDone}[i]
+		numPorts := []*int{&numTCP, &numUDP}[i]
+		go func(ports common.PackedPorts, proto string, ch chan<- dialInfo, currentPort *uint16, currentProto *bool, numPorts *int) {
 			var infos []dialInfo
 			for port := range ports.Iter() {
 				infos = append(infos, dialInfo{proto: proto, port: strconv.Itoa(int(port))})
 			}
 			rand.Shuffle(len(infos), func(i, j int) { infos[i], infos[j] = infos[j], infos[i] })
-			for _, inf := range infos {
+			*numPorts = len(infos)
+			for i, inf := range infos {
+				*currentPort = uint16(i)
 				outCh <- inf
 			}
-		}(ports, proto, outCh)
+			*currentProto = true
+		}(ports, proto, outCh, currentPort, currentProto, numPorts)
 	}
+	go func(currentTCP, currentUDP *uint16, tcpDone, udpDone *bool, numTcp, numUDP *int) {
+		for !(*tcpDone && *udpDone) {
+			time.Sleep(time.Second)
+			fmt.Printf("\rTCP: %d/%d, UDP: %d/%d", *currentTCP+1, *numTcp, *currentUDP+1, *numUDP)
+		}
+	}(&currentTCP, &currentUDP, &tcpDone, &udpDone, &numTCP, &numUDP)
 }
 
 // protocol:port pairs for dialer workers
@@ -281,11 +294,8 @@ var pause = time.Millisecond * 10
 func tryDial(proto, host string) bool {
 	conn, err := net.DialTimeout(proto, host, dialTimeout)
 	if err != nil {
-		if strings.Contains(err.Error(), "connection refused") {
-			return true
-		}
-		fmt.Printf("%T %[1]s\n", err)
-		return false
+		return strings.Contains(err.Error(), "connection refused")
+		// fmt.Printf("%T %[1]s\n", err)
 	}
 
 	defer conn.Close()

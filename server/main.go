@@ -167,51 +167,22 @@ func handleAsync(netif, ipStr string, conn net.Conn, settings common.InitSetting
 		return
 	}
 
+	asyncMux.Lock()
+	defer asyncMux.Unlock()
+
 	switch msg {
 	case common.MSG_ASYNC_START:
-		handleAsyncStart(conn, init, netif, ipStr, asyncScans, asyncMux)
+		handleAsyncStart(conn, init, netif, ipStr, asyncScans)
 	case common.MSG_GETPORTS:
-		asyncMux.Lock()
-		defer asyncMux.Unlock()
-
-		scanInfo, exists := asyncScans[init.Ticket]
-		if !exists {
-			log.Printf("non-existing ticket 0x%x accessed in async getports", init.Ticket)
-			return
-		}
-
-		var result common.PortsResult
-		result.Pack(scanInfo.tcp, scanInfo.udp)
-		if err := sendPortsResult(conn, result); err != nil {
-			log.Printf("error sending async ports result: %s", err)
-			return
-		}
+		handleAsyncGetports(conn, init, netif, ipStr, asyncScans)
 	case common.MSG_DONE:
-		asyncMux.Lock()
-		defer asyncMux.Unlock()
-
-		scanInfo, exists := asyncScans[init.Ticket]
-		if !exists {
-			log.Printf("non-existing ticket 0x%x accessed in async done", init.Ticket)
-			return
-		}
-
-		scanInfo.handle.Close()
-		scanInfo.workerWG.Wait()
-		delete(asyncScans, init.Ticket)
-		if err := sendSimple(conn, common.MSG_DONE); err != nil {
-			log.Printf("error sending async done message: %s", err)
-			return
-		}
+		handleAsyncDone(conn, init, netif, ipStr, asyncScans)
 	default:
 		log.Printf("unexpected async message: 0x%x", msg)
-		return
 	}
 }
 
-func handleAsyncStart(conn net.Conn, init common.AsyncInit, netif, ipStr string, asyncScans map[uint64]asyncScanInfo, asyncMux *sync.Mutex) {
-	asyncMux.Lock()
-	defer asyncMux.Unlock()
+func handleAsyncStart(conn net.Conn, init common.AsyncInit, netif, ipStr string, asyncScans map[uint64]asyncScanInfo) {
 	_, exists := asyncScans[init.Ticket]
 	if exists {
 		log.Printf("duplicate ticket 0x%x started", init.Ticket)
@@ -258,6 +229,38 @@ func handleAsyncStart(conn net.Conn, init common.AsyncInit, netif, ipStr string,
 		log.Printf("error sending init done message in async: %s", err)
 		return
 	}
+}
+
+func handleAsyncGetports(conn net.Conn, init common.AsyncInit, netif, ipStr string, asyncScans map[uint64]asyncScanInfo) {
+	scanInfo, exists := asyncScans[init.Ticket]
+	if !exists {
+		log.Printf("non-existing ticket 0x%x accessed in async getports", init.Ticket)
+		return
+	}
+
+	var result common.PortsResult
+	result.Pack(scanInfo.tcp, scanInfo.udp)
+	if err := sendPortsResult(conn, result); err != nil {
+		log.Printf("error sending async ports result: %s", err)
+		return
+	}
+}
+
+func handleAsyncDone(conn net.Conn, init common.AsyncInit, netif, ipStr string, asyncScans map[uint64]asyncScanInfo) {
+	scanInfo, exists := asyncScans[init.Ticket]
+	if !exists {
+		log.Printf("non-existing ticket 0x%x accessed in async done", init.Ticket)
+		return
+	}
+
+	scanInfo.handle.Close()
+	scanInfo.workerWG.Wait()
+	delete(asyncScans, init.Ticket)
+	if err := sendSimple(conn, common.MSG_DONE); err != nil {
+		log.Printf("error sending async done message: %s", err)
+		return
+	}
+
 }
 
 func getAsyncInit(conn net.Conn) (init common.AsyncInit, err error) {
