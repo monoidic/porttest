@@ -286,9 +286,11 @@ func dialer(ip string, inCh <-chan dialInfo, wg *sync.WaitGroup) {
 	}
 }
 
-var dialPayload = []byte("X")
-var dialTimeout = time.Second * 3
-var pause = time.Millisecond * 10
+var (
+	dialPayload = []byte("X")
+	dialTimeout = time.Second * 3
+	pause       = time.Millisecond * 10
+)
 
 // attempt a connection to a protoocol:port pair
 func tryDial(proto, host string) bool {
