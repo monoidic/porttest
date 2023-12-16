@@ -240,32 +240,49 @@ func getServerConn(serverNetloc string) serverConn {
 
 // generate protocol:port pairs to attempt to connect to from PortsResult
 func generateDialInfo(result *common.PortsResult, outCh chan<- dialInfo) {
+	// status info for printing
 	var currentTCP, currentUDP uint16
 	var numTCP, numUDP int
 	var tcpDone, udpDone bool
+
 	for i, ports := range []common.PackedPorts{result.Tcp, result.Udp} {
+		// per-protocol info
 		proto := []string{"tcp", "udp"}[i]
 		currentPort := []*uint16{&currentTCP, &currentUDP}[i]
-		currentProto := []*bool{&tcpDone, &udpDone}[i]
+		currentProtoDone := []*bool{&tcpDone, &udpDone}[i]
 		numPorts := []*int{&numTCP, &numUDP}[i]
+
 		go func(ports common.PackedPorts, proto string, ch chan<- dialInfo, currentPort *uint16, currentProto *bool, numPorts *int) {
+			// collect together and shuffle ports instead of scanning through linearly
 			var infos []dialInfo
 			for port := range ports.Iter() {
 				infos = append(infos, dialInfo{proto: proto, port: strconv.Itoa(int(port))})
 			}
+
 			rand.Shuffle(len(infos), func(i, j int) { infos[i], infos[j] = infos[j], infos[i] })
 			*numPorts = len(infos)
+
 			for i, inf := range infos {
 				*currentPort = uint16(i)
 				outCh <- inf
 			}
+
 			*currentProto = true
-		}(ports, proto, outCh, currentPort, currentProto, numPorts)
+		}(ports, proto, outCh, currentPort, currentProtoDone, numPorts)
 	}
+
+	// periodically print out scan status info
 	go func(currentTCP, currentUDP *uint16, tcpDone, udpDone *bool, numTcp, numUDP *int) {
-		for !(*tcpDone && *udpDone) {
+		for {
 			time.Sleep(time.Second)
-			fmt.Printf("\rTCP: %d/%d, UDP: %d/%d", *currentTCP+1, *numTcp, *currentUDP+1, *numUDP)
+			currentTCP := *currentTCP + 1
+			currentUDP := *currentUDP + 1
+			numTcp := *numTcp
+			numUDP := *numUDP
+			if *tcpDone && *udpDone {
+				break
+			}
+			fmt.Printf("\rTCP: %d/%d, UDP: %d/%d        ", currentTCP, numTcp, currentUDP, numUDP)
 		}
 	}(&currentTCP, &currentUDP, &tcpDone, &udpDone, &numTCP, &numUDP)
 }
