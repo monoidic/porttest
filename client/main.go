@@ -36,7 +36,7 @@ func main() {
 	flag.Parse()
 
 	if targetIP == "" {
-		log.Panicln("target IP unpsecified")
+		log.Panicln("target IP unspecified")
 	}
 
 	if _, err := netip.ParseAddr(targetIP); err != nil {
