@@ -18,6 +18,10 @@ import (
 	"github.com/monoidic/porttest/common"
 )
 
+var (
+	numRetries int
+)
+
 func main() {
 	var targetIP string
 	var serverNetloc string
@@ -32,8 +36,13 @@ func main() {
 	flag.StringVar(&resultName, "result_name", "result", "name for this result")
 	flag.StringVar(&portS, "ports", "0-1024", "ports to scan (format: comma-seperated ports or inclusive ranges, e.g 80,443,600-700)")
 	flag.IntVar(&numConns, "conns", 20, "number of parallel connections to use")
+	flag.IntVar(&numRetries, "retries", 3, "number of connection retries for server conn establishment")
 	flag.BoolVar(&settings.Async, "async", false, "use async comms")
 	flag.Parse()
+
+	if numRetries < 1 {
+		log.Panicln("invalid retries value")
+	}
 
 	if targetIP == "" {
 		log.Panicln("target IP unspecified")
@@ -224,13 +233,21 @@ func formatRange(start, end uint16) string {
 
 // set up and configure connection to the server
 func getServerConn(serverNetloc string) serverConn {
-	var tcpConn *net.TCPConn
-	if addrport, err := netip.ParseAddrPort(serverNetloc); err != nil {
+	addrport, err := netip.ParseAddrPort(serverNetloc)
+	if err != nil {
 		log.Panicf("invalid server IP:port %q: %s\n", serverNetloc, err)
-	} else {
-		tcpaddr := net.TCPAddrFromAddrPort(addrport)
-		tcpConn = common.Check1(net.DialTCP("tcp", nil, tcpaddr))
 	}
+
+	tcpaddr := net.TCPAddrFromAddrPort(addrport)
+	var tcpConn *net.TCPConn
+	for i := 0; i < numRetries; i++ {
+		tcpConn, err = net.DialTCP("tcp", nil, tcpaddr)
+		if err == nil {
+			break
+		}
+	}
+
+	common.Check(err)
 
 	common.Check(tcpConn.SetKeepAlive(true))
 	common.Check(tcpConn.SetKeepAlivePeriod(time.Second * 25))
