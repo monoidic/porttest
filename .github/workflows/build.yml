@@ -10,7 +10,7 @@ jobs:
     outputs:
       upload_url: ${{steps.release.outputs.upload_url}}
     steps:
-      - uses: actions/create-release@v1
+      - uses: actions/create-release@v1.1.4
         id: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -26,11 +26,11 @@ jobs:
       matrix:
         arch: [ x86_64, aarch64 ]
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4.1.1
     - run: sudo sh -c 'apt update && apt install qemu-user-static'
 
     # build in alpine chroot to allow for the binary to be static
-    - run: wget -O rootfs.tgz https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/${{ matrix.arch }}/alpine-minirootfs-3.19.0-${{ matrix.arch }}.tar.gz
+    - run: wget -O rootfs.tgz https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/${{ matrix.arch }}/alpine-minirootfs-3.19.1-${{ matrix.arch }}.tar.gz
     - run: mkdir rootfs
     - run: sudo tar -C rootfs -xf rootfs.tgz
     # actually have DNS resolution
@@ -45,7 +45,7 @@ jobs:
     - run: cp server/server client/client a
     - run: cd a && zip release.zip server client && mv release.zip ..
 
-    - uses: actions/upload-release-asset@v1
+    - uses: actions/upload-release-asset@v1.0.2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:

@@ -1,6 +1,11 @@
 package common
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/binary"
+	"io"
+	"iter"
 	"log"
 	"math/bits"
 )
@@ -55,12 +60,20 @@ type InitMsg struct {
 	Flags uint8
 }
 
+type HttpInitMsg struct {
+	Version uint8
+	Ip      string
+	// zlib-compressed and base64'd
+	Ports []byte
+}
+
 type InitSettings struct {
 	Async bool
+	Http  bool
 }
 
 // increment with protocol changes
-const VERSION = 1
+const VERSION = 2
 
 type AsyncInit struct {
 	Ticket uint64
@@ -81,6 +94,13 @@ type PackedPorts struct {
 	Packed [0x2000]byte
 }
 
+type HttpMessage struct {
+	Ticket uint64
+	Code   uint8
+	//code-dependent
+	Body any
+}
+
 // count the number of ports indicated as reachable in the given PackedPorts
 func (p *PackedPorts) Len() (total int) {
 	for _, b := range p.Packed {
@@ -90,25 +110,20 @@ func (p *PackedPorts) Len() (total int) {
 }
 
 // returns a channel to which every port marked in PackedPorts is written and which is closed at the end
-func (p *PackedPorts) Iter() <-chan uint16 {
-	ret := make(chan uint16, 16)
+func (p *PackedPorts) Iter(yield func(V uint16) bool) {
 
-	go func(arr [0x2000]byte, ch chan<- uint16) {
-		for i, b := range arr {
-			if b == 0 {
-				continue
-			}
-			for j := 0; j < 8; j++ {
-				if (b & (1 << j)) != 0 {
-					ch <- uint16(i*8 + j)
+	for i, b := range p.Packed {
+		if b == 0 {
+			continue
+		}
+		for j := range 8 {
+			if (b & (1 << j)) != 0 {
+				if !yield(uint16(i*8 + j)) {
+					return
 				}
 			}
 		}
-
-		close(ch)
-	}(p.Packed, ret)
-
-	return ret
+	}
 }
 
 // response from the server to the client, indicating what ports were seen to be contacted on TCP and UDP
@@ -125,8 +140,20 @@ func (p *PortsResult) Len() int {
 func (p *PortsResult) Pack(tcp, udp *[65536]bool) {
 	for arrI, arr := range []*[65536]bool{tcp, udp} {
 		outArr := []*PackedPorts{&p.Tcp, &p.Udp}[arrI]
-		for i := 0; i < 0x2000; i++ {
-			outArr.Packed[i] = boolsToByte(arr, i*8)
+		for i, v := range portsToPacked(arr) {
+			outArr.Packed[i] = v
+		}
+	}
+}
+
+func portsToPacked(ports *[65536]bool) iter.Seq2[int, uint8] {
+	return func(yield func(I int, V uint8) bool) {
+		for i := 0; i < 65536; i += 8 {
+			v := b2i(ports[i], 1) + b2i(ports[i+1], 2) + b2i(ports[i+2], 4) + b2i(ports[i+3], 8) +
+				b2i(ports[i+4], 16) + b2i(ports[i+5], 32) + b2i(ports[i+6], 64) + b2i(ports[i+7], 128)
+			if !yield(i/8, v) {
+				return
+			}
 		}
 	}
 }
@@ -137,12 +164,6 @@ func b2i(b bool, i uint8) uint8 {
 		return i
 	}
 	return 0
-}
-
-// converts 8 bools at arr[i:i+8] into a uint8
-func boolsToByte(arr *[65536]bool, i int) uint8 {
-	return b2i(arr[i], 1) + b2i(arr[i+1], 2) + b2i(arr[i+2], 4) + b2i(arr[i+3], 8) +
-		b2i(arr[i+4], 16) + b2i(arr[i+5], 32) + b2i(arr[i+6], 64) + b2i(arr[i+7], 128)
 }
 
 // panic out on an error;
@@ -158,4 +179,28 @@ func Check(err error) {
 func Check1[T any](arg1 T, err error) T {
 	Check(err)
 	return arg1
+}
+
+func ToZlib(plain any) ([]byte, error) {
+	var compressed bytes.Buffer
+	w := zlib.NewWriter(&compressed)
+	err := binary.Write(w, binary.BigEndian, plain)
+	if err != nil {
+		return nil, err
+	}
+	err = w.Close()
+	if err != nil {
+		return nil, err
+	}
+	return compressed.Bytes(), nil
+}
+
+func FromZlib(compressed []byte) ([]byte, error) {
+	buf := bytes.NewBuffer(compressed)
+	r, err := zlib.NewReader(buf)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return io.ReadAll(r)
 }
