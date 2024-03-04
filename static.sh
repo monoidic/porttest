@@ -1,5 +1,9 @@
 #!/bin/sh
 
+# lol
+# lmao
+sed -i 's/v3.19/edge/' /etc/apk/repositories
+
 apk add alpine-sdk go libpcap-dev
 
 ## workaround for alpine breaking Go with this error:
