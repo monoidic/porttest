@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -32,7 +31,7 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if msgS, ok := common.MsgMap[msg.Code]; ok {
-		log.Printf("got http %s with ticket 0x%x\n", msgS, msg.Ticket)
+		log.Printf("got http %s with ticket 0x%x, %d scans active\n", msgS, msg.Ticket, len(asyncScans))
 	} else {
 		log.Printf("got invalid http msg 0x%x", msg.Code)
 		return
@@ -54,18 +53,12 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func httpStart(w http.ResponseWriter, msg *common.HttpMessage, srcIPPort string) {
-	rawMap := msg.Body.(map[string]any)
-	initMsg := common.HttpInitMsg{
-		Version: uint8(rawMap["Version"].(float64)),
-		Ip:      rawMap["Ip"].(string),
-	}
-	portsB64 := rawMap["Ports"].(string)
-	portsB, err := base64.StdEncoding.AppendDecode(nil, []byte(portsB64))
+	var initMsg common.HttpInitMsg
+	err := json.Unmarshal(msg.Body, &initMsg)
 	if err != nil {
-		log.Printf("unable to decode base64: %s", err)
+		log.Printf("unable to decode initMsg: %s", err)
 		return
 	}
-	initMsg.Ports = portsB
 
 	if initMsg.Version != common.VERSION {
 		log.Printf("mismatching version (expected %d, got %d)", common.VERSION, initMsg.Version)
@@ -122,7 +115,7 @@ func httpStart(w http.ResponseWriter, msg *common.HttpMessage, srcIPPort string)
 	}
 
 	if err = sendMsg(w, &resp); err != nil {
-		log.Printf("error sending message: %s", err)
+		log.Printf("httpStart: error sending message: %s", err)
 		return
 	}
 }
@@ -143,12 +136,17 @@ func httpGetPorts(w http.ResponseWriter, msg *common.HttpMessage) {
 		return
 	}
 
+	body, err = json.Marshal(&body)
+	if err != nil {
+		log.Printf("failed to encode to json: %s", err)
+	}
+
 	resp := common.HttpMessage{
 		Body: body,
 	}
 
 	if err := sendMsg(w, &resp); err != nil {
-		log.Printf("error sending message: %s", err)
+		log.Printf("httpGetPorts: error sending message: %s", err)
 		return
 	}
 }
@@ -169,7 +167,7 @@ func httpDone(w http.ResponseWriter, msg *common.HttpMessage) {
 	}
 
 	if err := sendMsg(w, &resp); err != nil {
-		log.Printf("error sending message: %s", err)
+		log.Printf("httpDone: error sending message: %s", err)
 		return
 	}
 

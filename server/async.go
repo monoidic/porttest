@@ -22,7 +22,7 @@ func handleAsync(ipStr string, conn net.Conn) {
 	}
 
 	if msgS, ok := common.MsgMap[msg]; ok {
-		log.Printf("got %s with ticket 0x%x\n", msgS, init.Ticket)
+		log.Printf("got %s with ticket 0x%x, %d scans active\n", msgS, init.Ticket, len(asyncScans))
 	} else {
 		log.Printf("got invalid msg 0x%x", msg)
 		return

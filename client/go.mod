@@ -1,6 +1,6 @@
 module github.com/monoidic/porttest/client
 
-go 1.22.0
+go 1.22.5
 
 replace github.com/monoidic/porttest/common => ../common
 

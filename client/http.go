@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -48,11 +47,11 @@ func getHttpConn(urlS string, insecure bool, srcIP netip.Addr, ports *common.Por
 func (sc *httpServerConn) setup() {
 	msg := common.HttpMessage{
 		Code: common.MSG_ASYNC_START,
-		Body: &common.HttpInitMsg{
+		Body: common.Check1(json.Marshal(&common.HttpInitMsg{
 			Version: common.VERSION,
 			Ip:      sc.srcIP.String(),
 			Ports:   common.Check1(common.ToZlib(sc.ports)),
-		},
+		})),
 	}
 	resp := sc.exchange(&msg)
 	if resp.Code != common.MSG_INIT_DONE {
@@ -86,8 +85,8 @@ func (sc *httpServerConn) getPorts() {
 	}
 	resp := sc.exchange(&msg)
 
-	b64ed := resp.Body.(string)
-	compressed := common.Check1(base64.StdEncoding.AppendDecode(nil, []byte(b64ed)))
+	var compressed []byte
+	common.Check(json.Unmarshal(resp.Body, &compressed))
 	decoded := common.Check1(common.FromZlib(compressed))
 	common.Check(binary.Read(bytes.NewBuffer(decoded), binary.BigEndian, sc.ports))
 }

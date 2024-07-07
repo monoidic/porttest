@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"iter"
 	"log"
@@ -98,7 +99,7 @@ type HttpMessage struct {
 	Ticket uint64
 	Code   uint8
 	//code-dependent
-	Body any
+	Body json.RawMessage
 }
 
 // count the number of ports indicated as reachable in the given PackedPorts
