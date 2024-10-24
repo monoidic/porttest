@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/monoidic/porttest/common"
 )
 
@@ -31,7 +32,7 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if msgS, ok := common.MsgMap[msg.Code]; ok {
-		log.Printf("got http %s with ticket 0x%x, %d scans active\n", msgS, msg.Ticket, len(asyncScans))
+		log.Printf("got http %s with ticket 0x%x, %d scans active\n", msgS, msg.Ticket, asyncScans.Len())
 	} else {
 		log.Printf("got invalid http msg 0x%x", msg.Code)
 		return
@@ -75,13 +76,12 @@ func httpStart(w http.ResponseWriter, msg *common.HttpMessage, srcIPPort string)
 		ip = netip.MustParseAddrPort(srcIPPort).Addr()
 	}
 
-	_, exists := asyncScans[msg.Ticket]
-	if exists {
+	if asyncScans.Has(msg.Ticket) {
 		log.Printf("ticket already present: 0x%x", msg.Ticket)
 		return
 	}
 
-	if len(asyncScans) > scanLimit {
+	if asyncScans.Len() > scanLimit {
 		log.Print("over scan limit")
 		return
 	}
@@ -103,12 +103,13 @@ func httpStart(w http.ResponseWriter, msg *common.HttpMessage, srcIPPort string)
 
 	handle, wg := setupPcap(&tcp, &udp, &ports, ip.String())
 
-	asyncScans[msg.Ticket] = asyncScanInfo{
+	info := &asyncScanInfo{
 		handle:   handle,
 		tcp:      &tcp,
 		udp:      &udp,
 		workerWG: wg,
 	}
+	asyncScans.Set(msg.Ticket, info, ttlcache.DefaultTTL)
 
 	resp := common.HttpMessage{
 		Code: common.MSG_INIT_DONE,
@@ -121,11 +122,13 @@ func httpStart(w http.ResponseWriter, msg *common.HttpMessage, srcIPPort string)
 }
 
 func httpGetPorts(w http.ResponseWriter, msg *common.HttpMessage) {
-	scanInfo, exists := asyncScans[msg.Ticket]
-	if !exists {
+	item := asyncScans.Get(msg.Ticket)
+	if item == nil {
 		log.Printf("ticket not present: 0x%x", msg.Ticket)
 		return
 	}
+
+	scanInfo := item.Value()
 
 	var result common.PortsResult
 	result.Pack(scanInfo.tcp, scanInfo.udp)
@@ -152,15 +155,11 @@ func httpGetPorts(w http.ResponseWriter, msg *common.HttpMessage) {
 }
 
 func httpDone(w http.ResponseWriter, msg *common.HttpMessage) {
-	scanInfo, exists := asyncScans[msg.Ticket]
-	if !exists {
+	_, existed := asyncScans.GetAndDelete(msg.Ticket)
+	if !existed {
 		log.Printf("ticket not present: 0x%x", msg.Ticket)
 		return
 	}
-
-	scanInfo.handle.Close()
-	scanInfo.workerWG.Wait()
-	delete(asyncScans, msg.Ticket)
 
 	resp := common.HttpMessage{
 		Code: common.MSG_DONE,

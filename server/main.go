@@ -25,7 +25,7 @@ const (
 
 var (
 	scanLimit  int
-	asyncScans = map[uint64]asyncScanInfo{}
+	asyncScans = makeCache()
 	asyncMux   sync.Mutex
 	netif      string
 )

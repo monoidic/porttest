@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/zlib"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/monoidic/porttest/common"
 )
 
@@ -175,4 +177,17 @@ func initPortArrs(tcp, udp *[65536]bool, result *common.PortsResult) {
 			arr[port] = false
 		}
 	}
+}
+
+func makeCache() *ttlcache.Cache[uint64, *asyncScanInfo] {
+	cache := ttlcache.New(
+		ttlcache.WithTTL[uint64, *asyncScanInfo](1 * time.Hour),
+	)
+	cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, item *ttlcache.Item[uint64, *asyncScanInfo]) {
+		v := item.Value()
+		v.handle.Close()
+		v.workerWG.Wait()
+
+	})
+	return cache
 }

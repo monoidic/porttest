@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/monoidic/porttest/common"
 )
 
@@ -22,7 +23,7 @@ func handleAsync(ipStr string, conn net.Conn) {
 	}
 
 	if msgS, ok := common.MsgMap[msg]; ok {
-		log.Printf("got %s with ticket 0x%x, %d scans active\n", msgS, init.Ticket, len(asyncScans))
+		log.Printf("got %s with ticket 0x%x, %d scans active\n", msgS, init.Ticket, asyncScans.Len())
 	} else {
 		log.Printf("got invalid msg 0x%x", msg)
 		return
@@ -44,13 +45,12 @@ func handleAsync(ipStr string, conn net.Conn) {
 }
 
 func handleAsyncStart(conn net.Conn, init common.AsyncInit, ipStr string) {
-	_, exists := asyncScans[init.Ticket]
-	if exists {
+	if asyncScans.Has(init.Ticket) {
 		log.Printf("duplicate ticket 0x%x started", init.Ticket)
 		return
 	}
 
-	if len(asyncScans) > scanLimit {
+	if asyncScans.Len() > scanLimit {
 		log.Printf("scan limit of %d exceeded", scanLimit)
 		return
 	}
@@ -64,12 +64,13 @@ func handleAsyncStart(conn net.Conn, init common.AsyncInit, ipStr string) {
 	var tcp, udp [65536]bool
 	handle, wg := setupPcap(&tcp, &udp, &ports, ipStr)
 
-	asyncScans[init.Ticket] = asyncScanInfo{
+	info := &asyncScanInfo{
 		handle:   handle,
 		tcp:      &tcp,
 		udp:      &udp,
 		workerWG: wg,
 	}
+	asyncScans.Set(init.Ticket, info, ttlcache.DefaultTTL)
 
 	if err := sendSimple(conn, common.MSG_INIT_DONE); err != nil {
 		log.Printf("error sending init done message in async: %s", err)
@@ -78,11 +79,13 @@ func handleAsyncStart(conn net.Conn, init common.AsyncInit, ipStr string) {
 }
 
 func handleAsyncGetports(conn net.Conn, init common.AsyncInit) {
-	scanInfo, exists := asyncScans[init.Ticket]
-	if !exists {
+	item := asyncScans.Get(init.Ticket)
+	if item == nil {
 		log.Printf("non-existing ticket 0x%x accessed in async getports", init.Ticket)
 		return
 	}
+
+	scanInfo := item.Value()
 
 	var result common.PortsResult
 	result.Pack(scanInfo.tcp, scanInfo.udp)
@@ -93,20 +96,16 @@ func handleAsyncGetports(conn net.Conn, init common.AsyncInit) {
 }
 
 func handleAsyncDone(conn net.Conn, init common.AsyncInit) {
-	scanInfo, exists := asyncScans[init.Ticket]
-	if !exists {
+	_, existed := asyncScans.GetAndDelete(init.Ticket)
+	if !existed {
 		log.Printf("non-existing ticket 0x%x accessed in async done", init.Ticket)
 		return
 	}
 
-	scanInfo.handle.Close()
-	scanInfo.workerWG.Wait()
-	delete(asyncScans, init.Ticket)
 	if err := sendSimple(conn, common.MSG_DONE); err != nil {
 		log.Printf("error sending async done message: %s", err)
 		return
 	}
-
 }
 
 func getAsyncInit(conn net.Conn) (init common.AsyncInit, err error) {
