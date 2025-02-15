@@ -170,10 +170,18 @@ func saveResults(resultName string, ports *common.PortsResult) {
 
 	for pPortsI, pPorts := range []common.PackedPorts{ports.Tcp, ports.Udp} {
 		proto := []string{"tcp", "udp"}[pPortsI]
+
 		fmt.Fprintf(fd, "[closed %s ports]\n", proto)
-		for portRange := range numsToRanges(pPorts.Iter) {
+		for portRange := range numsToRanges(pPorts.IterClosed) {
 			fmt.Fprintf(fd, "%s\n", portRange)
 		}
 		fmt.Fprint(fd, "\n")
+
+		fmt.Fprintf(fd, "[open %s ports]\n", proto)
+		for portRange := range numsToRanges(pPorts.IterOpen) {
+			fmt.Fprintf(fd, "%s\n", portRange)
+		}
+		fmt.Fprint(fd, "\n")
+
 	}
 }

@@ -78,7 +78,7 @@ func generateDialInfo(result *common.PortsResult, outCh chan<- dialInfo) {
 		go func(ports common.PackedPorts, proto string, ch chan<- dialInfo, currentPort *uint16, currentProto *bool, numPorts *int) {
 			// collect together and shuffle ports instead of scanning through linearly
 			var infos []dialInfo
-			for port := range ports.Iter {
+			for port := range ports.IterClosed {
 				infos = append(infos, dialInfo{proto: proto, port: strconv.Itoa(int(port))})
 			}
 

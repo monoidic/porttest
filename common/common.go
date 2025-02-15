@@ -110,15 +110,30 @@ func (p *PackedPorts) Len() (total int) {
 	return total
 }
 
-// returns a channel to which every port marked in PackedPorts is written and which is closed at the end
-func (p *PackedPorts) Iter(yield func(V uint16) bool) {
-
+// returns an iterator yielding to which every port marked as closed in PackedPorts
+func (p *PackedPorts) IterClosed(yield func(V uint16) bool) {
 	for i, b := range p.Packed {
 		if b == 0 {
 			continue
 		}
 		for j := range 8 {
 			if (b & (1 << j)) != 0 {
+				if !yield(uint16(i*8 + j)) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// returns an iterator yielding to which every port marked as open in PackedPorts
+func (p *PackedPorts) IterOpen(yield func(V uint16) bool) {
+	for i, b := range p.Packed {
+		if b == 0xff {
+			continue
+		}
+		for j := range 8 {
+			if (b & (1 << j)) == 0 {
 				if !yield(uint16(i*8 + j)) {
 					return
 				}

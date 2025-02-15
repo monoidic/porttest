@@ -173,7 +173,7 @@ func initPortArrs(tcp, udp *[65536]bool, result *common.PortsResult) {
 	for i, msgPorts := range []common.PackedPorts{result.Tcp, result.Udp} {
 		arr := []*[65536]bool{tcp, udp}[i]
 
-		for port := range msgPorts.Iter {
+		for port := range msgPorts.IterClosed {
 			arr[port] = false
 		}
 	}
