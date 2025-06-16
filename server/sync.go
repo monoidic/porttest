@@ -181,7 +181,7 @@ func initPortArrs(tcp, udp *[65536]bool, result *common.PortsResult) {
 
 func makeCache() *ttlcache.Cache[uint64, *asyncScanInfo] {
 	cache := ttlcache.New(
-		ttlcache.WithTTL[uint64, *asyncScanInfo](1 * time.Hour),
+		ttlcache.WithTTL[uint64, *asyncScanInfo](6 * time.Hour),
 	)
 	cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, item *ttlcache.Item[uint64, *asyncScanInfo]) {
 		v := item.Value()
