@@ -38,6 +38,7 @@ jobs:
     - run: sudo mkdir rootfs/src
     - run: sudo mount -t devtmpfs devtmpfs rootfs/dev/
     - run: sudo mount -o bind . rootfs/src
+    - run: sudo mount -t proc proc rootfs/proc
     - run: sudo cp $(which qemu-${{ matrix.arch }}-static) rootfs/
     - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static /bin/sh /src/static.sh
 
